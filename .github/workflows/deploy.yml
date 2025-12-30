@@ -117,18 +117,32 @@ jobs:
           aws s3 cp lambda/producer/producer.zip s3://${{ needs.deploy-infrastructure.outputs.s3-bucket }}/lambda-code/producer.zip
           aws s3 cp lambda/consumer/consumer.zip s3://${{ needs.deploy-infrastructure.outputs.s3-bucket }}/lambda-code/consumer.zip
 
+      - name: Delete existing Lambda stack if it exists
+        run: |
+          if aws cloudformation describe-stacks --stack-name ${{ env.LAMBDA_STACK_NAME }} --region ${{ env.AWS_REGION }} 2>/dev/null; then
+            echo "Deleting existing Lambda stack..."
+            aws cloudformation delete-stack --stack-name ${{ env.LAMBDA_STACK_NAME }} --region ${{ env.AWS_REGION }}
+            aws cloudformation wait stack-delete-complete --stack-name ${{ env.LAMBDA_STACK_NAME }} --region ${{ env.AWS_REGION }}
+            echo "Stack deleted successfully"
+          else
+            echo "No existing Lambda stack found"
+          fi
+
       - name: Deploy Lambda Functions Stack
         run: |
-          aws cloudformation deploy \
-            --template-file cloudformation/lambda-functions.yaml \
+          aws cloudformation create-stack \
             --stack-name ${{ env.LAMBDA_STACK_NAME }} \
-            --parameter-overrides \
-              DynamoDBTableName=${{ needs.deploy-infrastructure.outputs.dynamodb-table }} \
-              SNSTopicArn=${{ needs.deploy-infrastructure.outputs.sns-topic-arn }} \
-              SQSQueueArn=${{ needs.deploy-infrastructure.outputs.sqs-queue-arn }} \
-              S3BucketName=${{ needs.deploy-infrastructure.outputs.s3-bucket }} \
+            --template-body file://cloudformation/lambda-functions.yaml \
+            --parameters \
+              ParameterKey=DynamoDBTableName,ParameterValue=${{ needs.deploy-infrastructure.outputs.dynamodb-table }} \
+              ParameterKey=SNSTopicArn,ParameterValue=${{ needs.deploy-infrastructure.outputs.sns-topic-arn }} \
+              ParameterKey=SQSQueueArn,ParameterValue=${{ needs.deploy-infrastructure.outputs.sqs-queue-arn }} \
+              ParameterKey=S3BucketName,ParameterValue=${{ needs.deploy-infrastructure.outputs.s3-bucket }} \
             --capabilities CAPABILITY_NAMED_IAM \
-            --no-fail-on-empty-changeset \
+            --region ${{ env.AWS_REGION }}
+          
+          aws cloudformation wait stack-create-complete \
+            --stack-name ${{ env.LAMBDA_STACK_NAME }} \
             --region ${{ env.AWS_REGION }}
 
       - name: Get Lambda Function Names
