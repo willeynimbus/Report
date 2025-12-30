@@ -32,7 +32,19 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Check if Infrastructure Stack Exists
+        id: check-infra-stack
+        run: |
+          if aws cloudformation describe-stacks --stack-name ${{ env.INFRASTRUCTURE_STACK_NAME }} --region ${{ env.AWS_REGION }} 2>/dev/null; then
+            echo "stack-exists=true" >> $GITHUB_OUTPUT
+            echo "Infrastructure stack already exists, skipping deployment"
+          else
+            echo "stack-exists=false" >> $GITHUB_OUTPUT
+            echo "Infrastructure stack does not exist, will deploy"
+          fi
+
       - name: Deploy Infrastructure Stack
+        if: steps.check-infra-stack.outputs.stack-exists == 'false'
         run: |
           aws cloudformation deploy \
             --template-file cloudformation/infrastructure.yaml \
