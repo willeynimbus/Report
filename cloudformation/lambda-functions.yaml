@@ -160,6 +160,18 @@ Resources:
         - Key: Purpose
           Value: NetworkInventory
 
+  # ========================================
+  # SQS Event Source Mapping for Consumer Lambda
+  # ========================================
+  ConsumerEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !Ref SQSQueueArn
+      FunctionName: !Ref ConsumerLambdaFunction
+      BatchSize: 10
+      MaximumBatchingWindowInSeconds: 5
+      Enabled: true
+
 Outputs:
   ProducerLambdaArn:
     Description: Producer Lambda Function ARN
