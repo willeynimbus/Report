@@ -68,7 +68,7 @@ Resources:
   ProducerLambdaFunction:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: NetworkDataProducer
+      FunctionName: NetworkDataProducerV2
       Runtime: python3.11
       Handler: lambda_function.lambda_handler
       Role: !GetAtt ProducerLambdaRole.Arn
@@ -84,7 +84,7 @@ Resources:
       Description: Scans DynamoDB and publishes network collection events to SNS
       Tags:
         - Key: Name
-          Value: NetworkDataProducer
+          Value: NetworkDataProducerV2
         - Key: Purpose
           Value: NetworkInventory
 
@@ -140,7 +140,7 @@ Resources:
   ConsumerLambdaFunction:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: NetworkDataConsumer
+      FunctionName: NetworkDataConsumerV2
       Runtime: python3.11
       Handler: lambda_function.lambda_handler
       Role: !GetAtt ConsumerLambdaRole.Arn
@@ -156,7 +156,7 @@ Resources:
       Description: Processes SQS messages and collects network data from accounts
       Tags:
         - Key: Name
-          Value: NetworkDataConsumer
+          Value: NetworkDataConsumerV2
         - Key: Purpose
           Value: NetworkInventory
 
