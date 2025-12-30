@@ -1,0 +1,198 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Network Data Collection - Producer and Consumer Lambda Functions'
+
+Parameters:
+  DynamoDBTableName:
+    Type: String
+    Description: Name of the existing DynamoDB table with account metadata
+    Default: NetworkAccountMetadata
+
+  SNSTopicArn:
+    Type: String
+    Description: ARN of the existing SNS topic for publishing events
+
+  SQSQueueArn:
+    Type: String
+    Description: ARN of the existing SQS queue for receiving events
+
+  S3BucketName:
+    Type: String
+    Description: Name of the existing S3 bucket where Lambda code and network data are stored
+
+  S3Prefix:
+    Type: String
+    Description: S3 prefix for network data files
+    Default: network-data/
+
+Resources:
+  # ========================================
+  # IAM Role for Producer Lambda
+  # ========================================
+  ProducerLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ProducerLambdaRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: ProducerLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:Scan
+                  - dynamodb:GetItem
+                  - dynamodb:Query
+                Resource: !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamoDBTableName}'
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref SNSTopicArn
+      Tags:
+        - Key: Name
+          Value: ProducerLambdaRole
+        - Key: Purpose
+          Value: NetworkInventory
+
+  # ========================================
+  # Producer Lambda Function
+  # ========================================
+  ProducerLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: NetworkDataProducer
+      Runtime: python3.11
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt ProducerLambdaRole.Arn
+      Timeout: 60
+      MemorySize: 256
+      Environment:
+        Variables:
+          DYNAMODB_TABLE_NAME: !Ref DynamoDBTableName
+          SNS_TOPIC_ARN: !Ref SNSTopicArn
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: lambda-code/producer.zip
+      Description: Scans DynamoDB and publishes network collection events to SNS
+      Tags:
+        - Key: Name
+          Value: NetworkDataProducer
+        - Key: Purpose
+          Value: NetworkInventory
+
+  # ========================================
+  # IAM Role for Consumer Lambda
+  # ========================================
+  ConsumerLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ConsumerLambdaRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: ConsumerLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                Resource: !Ref SQSQueueArn
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                Resource: !Sub 'arn:aws:s3:::${S3BucketName}/*'
+              - Effect: Allow
+                Action:
+                  - sts:AssumeRole
+                Resource: 'arn:aws:iam::*:role/NetworkDataCollectionRole'
+              - Effect: Allow
+                Action:
+                  - ec2:Describe*
+                Resource: '*'
+      Tags:
+        - Key: Name
+          Value: ConsumerLambdaRole
+        - Key: Purpose
+          Value: NetworkInventory
+
+  # ========================================
+  # Consumer Lambda Function
+  # ========================================
+  ConsumerLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: NetworkDataConsumer
+      Runtime: python3.11
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt ConsumerLambdaRole.Arn
+      Timeout: 300
+      MemorySize: 512
+      Environment:
+        Variables:
+          S3_BUCKET_NAME: !Ref S3BucketName
+          S3_PREFIX: !Ref S3Prefix
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: lambda-code/consumer.zip
+      Description: Processes SQS messages and collects network data from accounts
+      Tags:
+        - Key: Name
+          Value: NetworkDataConsumer
+        - Key: Purpose
+          Value: NetworkInventory
+
+Outputs:
+  ProducerLambdaArn:
+    Description: Producer Lambda Function ARN
+    Value: !GetAtt ProducerLambdaFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-ProducerLambda'
+
+  ProducerLambdaName:
+    Description: Producer Lambda Function Name
+    Value: !Ref ProducerLambdaFunction
+    Export:
+      Name: !Sub '${AWS::StackName}-ProducerLambdaName'
+
+  ProducerRoleArn:
+    Description: Producer Lambda IAM Role ARN
+    Value: !GetAtt ProducerLambdaRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-ProducerRole'
+
+  ConsumerLambdaArn:
+    Description: Consumer Lambda Function ARN
+    Value: !GetAtt ConsumerLambdaFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-ConsumerLambda'
+
+  ConsumerLambdaName:
+    Description: Consumer Lambda Function Name
+    Value: !Ref ConsumerLambdaFunction
+    Export:
+      Name: !Sub '${AWS::StackName}-ConsumerLambdaName'
+
+  ConsumerRoleArn:
+    Description: Consumer Lambda IAM Role ARN
+    Value: !GetAtt ConsumerLambdaRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-ConsumerRole'

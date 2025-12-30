@@ -1,0 +1,199 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Network Data Collection - Infrastructure Resources (DynamoDB, SNS, SQS, S3)'
+
+Parameters:
+  S3BucketName:
+    Type: String
+    Description: Base name for the S3 bucket (account ID will be appended)
+    Default: network-data-collection
+
+  DynamoDBTableName:
+    Type: String
+    Description: Name for the DynamoDB table storing account metadata
+    Default: NetworkAccountMetadata
+
+Resources:
+  # ========================================
+  # S3 Bucket for Network Data Storage
+  # ========================================
+  NetworkDataBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${S3BucketName}-v2-${AWS::AccountId}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldAthenaResults
+            Status: Enabled
+            Prefix: athena-results/
+            ExpirationInDays: 7
+      Tags:
+        - Key: Name
+          Value: NetworkDataCollectionBucket
+        - Key: Purpose
+          Value: NetworkInventory
+
+  # ========================================
+  # DynamoDB Table for Account Metadata
+  # ========================================
+  AccountMetadataTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${DynamoDBTableName}V2'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: account_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: account_id
+          KeyType: HASH
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+      Tags:
+        - Key: Name
+          Value: NetworkAccountMetadata
+        - Key: Purpose
+          Value: NetworkInventory
+
+  # ========================================
+  # SNS Topic for Event Publishing
+  # ========================================
+  NetworkDataCollectionTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: NetworkDataCollectionTopicV2
+      DisplayName: Network Data Collection Events
+      Tags:
+        - Key: Name
+          Value: NetworkDataCollectionTopic
+        - Key: Purpose
+          Value: NetworkInventory
+
+  # ========================================
+  # SQS Dead Letter Queue
+  # ========================================
+  NetworkDataCollectionDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: NetworkDataCollectionDLQV2
+      MessageRetentionPeriod: 1209600
+      Tags:
+        - Key: Name
+          Value: NetworkDataCollectionDLQ
+        - Key: Purpose
+          Value: NetworkInventory
+
+  # ========================================
+  # SQS Queue for Event Processing
+  # ========================================
+  NetworkDataCollectionQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: NetworkDataCollectionQueueV2
+      VisibilityTimeout: 300
+      MessageRetentionPeriod: 86400
+      ReceiveMessageWaitTimeSeconds: 20
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt NetworkDataCollectionDLQ.Arn
+        maxReceiveCount: 3
+      Tags:
+        - Key: Name
+          Value: NetworkDataCollectionQueue
+        - Key: Purpose
+          Value: NetworkInventory
+
+  # ========================================
+  # SQS Queue Policy
+  # ========================================
+  NetworkDataCollectionQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref NetworkDataCollectionQueue
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action:
+              - sqs:SendMessage
+            Resource: !GetAtt NetworkDataCollectionQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !Ref NetworkDataCollectionTopic
+
+  # ========================================
+  # SNS Subscription
+  # ========================================
+  NetworkDataCollectionSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: sqs
+      TopicArn: !Ref NetworkDataCollectionTopic
+      Endpoint: !GetAtt NetworkDataCollectionQueue.Arn
+      RawMessageDelivery: false
+
+Outputs:
+  S3BucketName:
+    Description: S3 Bucket for network data storage
+    Value: !Ref NetworkDataBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-S3Bucket'
+
+  S3BucketArn:
+    Description: S3 Bucket ARN
+    Value: !GetAtt NetworkDataBucket.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-S3BucketArn'
+
+  DynamoDBTableName:
+    Description: DynamoDB table for account metadata
+    Value: !Ref AccountMetadataTable
+    Export:
+      Name: !Sub '${AWS::StackName}-DynamoDBTable'
+
+  DynamoDBTableArn:
+    Description: DynamoDB table ARN
+    Value: !GetAtt AccountMetadataTable.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-DynamoDBTableArn'
+
+  SNSTopicArn:
+    Description: SNS Topic ARN
+    Value: !Ref NetworkDataCollectionTopic
+    Export:
+      Name: !Sub '${AWS::StackName}-SNSTopic'
+
+  SQSQueueUrl:
+    Description: SQS Queue URL
+    Value: !Ref NetworkDataCollectionQueue
+    Export:
+      Name: !Sub '${AWS::StackName}-SQSQueueUrl'
+
+  SQSQueueArn:
+    Description: SQS Queue ARN
+    Value: !GetAtt NetworkDataCollectionQueue.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-SQSQueueArn'
+
+  DLQUrl:
+    Description: Dead Letter Queue URL
+    Value: !Ref NetworkDataCollectionDLQ
+    Export:
+      Name: !Sub '${AWS::StackName}-DLQUrl'
+
+  DLQArn:
+    Description: Dead Letter Queue ARN
+    Value: !GetAtt NetworkDataCollectionDLQ.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-DLQArn'

@@ -1,0 +1,157 @@
+name: Deploy Network Data Collection Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+  INFRASTRUCTURE_STACK_NAME: network-infrastructure-v2
+  LAMBDA_STACK_NAME: network-lambda-functions-v2
+
+jobs:
+  deploy-infrastructure:
+    name: Deploy Infrastructure Stack
+    runs-on: ubuntu-latest
+    outputs:
+      s3-bucket: ${{ steps.get-outputs.outputs.s3-bucket }}
+      dynamodb-table: ${{ steps.get-outputs.outputs.dynamodb-table }}
+      sns-topic-arn: ${{ steps.get-outputs.outputs.sns-topic-arn }}
+      sqs-queue-arn: ${{ steps.get-outputs.outputs.sqs-queue-arn }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy Infrastructure Stack
+        run: |
+          aws cloudformation deploy \
+            --template-file cloudformation/infrastructure.yaml \
+            --stack-name ${{ env.INFRASTRUCTURE_STACK_NAME }} \
+            --no-fail-on-empty-changeset \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Get Stack Outputs
+        id: get-outputs
+        run: |
+          S3_BUCKET=$(aws cloudformation describe-stacks \
+            --stack-name ${{ env.INFRASTRUCTURE_STACK_NAME }} \
+            --query "Stacks[0].Outputs[?OutputKey=='S3BucketName'].OutputValue" \
+            --output text \
+            --region ${{ env.AWS_REGION }})
+          
+          DYNAMODB_TABLE=$(aws cloudformation describe-stacks \
+            --stack-name ${{ env.INFRASTRUCTURE_STACK_NAME }} \
+            --query "Stacks[0].Outputs[?OutputKey=='DynamoDBTableName'].OutputValue" \
+            --output text \
+            --region ${{ env.AWS_REGION }})
+          
+          SNS_TOPIC_ARN=$(aws cloudformation describe-stacks \
+            --stack-name ${{ env.INFRASTRUCTURE_STACK_NAME }} \
+            --query "Stacks[0].Outputs[?OutputKey=='SNSTopicArn'].OutputValue" \
+            --output text \
+            --region ${{ env.AWS_REGION }})
+          
+          SQS_QUEUE_ARN=$(aws cloudformation describe-stacks \
+            --stack-name ${{ env.INFRASTRUCTURE_STACK_NAME }} \
+            --query "Stacks[0].Outputs[?OutputKey=='SQSQueueArn'].OutputValue" \
+            --output text \
+            --region ${{ env.AWS_REGION }})
+          
+          echo "s3-bucket=$S3_BUCKET" >> $GITHUB_OUTPUT
+          echo "dynamodb-table=$DYNAMODB_TABLE" >> $GITHUB_OUTPUT
+          echo "sns-topic-arn=$SNS_TOPIC_ARN" >> $GITHUB_OUTPUT
+          echo "sqs-queue-arn=$SQS_QUEUE_ARN" >> $GITHUB_OUTPUT
+
+  package-and-deploy-lambdas:
+    name: Package and Deploy Lambda Functions
+    runs-on: ubuntu-latest
+    needs: deploy-infrastructure
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Package Producer Lambda
+        run: |
+          cd lambda/producer
+          zip -r producer.zip lambda_function.py
+          cd ../..
+
+      - name: Package Consumer Lambda
+        run: |
+          cd lambda/consumer
+          zip -r consumer.zip lambda_function.py
+          cd ../..
+
+      - name: Upload Lambda packages to S3
+        run: |
+          aws s3 cp lambda/producer/producer.zip s3://${{ needs.deploy-infrastructure.outputs.s3-bucket }}/lambda-code/producer.zip
+          aws s3 cp lambda/consumer/consumer.zip s3://${{ needs.deploy-infrastructure.outputs.s3-bucket }}/lambda-code/consumer.zip
+
+      - name: Deploy Lambda Functions Stack
+        run: |
+          aws cloudformation deploy \
+            --template-file cloudformation/lambda-functions.yaml \
+            --stack-name ${{ env.LAMBDA_STACK_NAME }} \
+            --parameter-overrides \
+              DynamoDBTableName=${{ needs.deploy-infrastructure.outputs.dynamodb-table }} \
+              SNSTopicArn=${{ needs.deploy-infrastructure.outputs.sns-topic-arn }} \
+              SQSQueueArn=${{ needs.deploy-infrastructure.outputs.sqs-queue-arn }} \
+              S3BucketName=${{ needs.deploy-infrastructure.outputs.s3-bucket }} \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Get Lambda Function Names
+        id: get-lambda-outputs
+        run: |
+          PRODUCER_LAMBDA=$(aws cloudformation describe-stacks \
+            --stack-name ${{ env.LAMBDA_STACK_NAME }} \
+            --query "Stacks[0].Outputs[?OutputKey=='ProducerLambdaName'].OutputValue" \
+            --output text \
+            --region ${{ env.AWS_REGION }})
+          
+          CONSUMER_LAMBDA=$(aws cloudformation describe-stacks \
+            --stack-name ${{ env.LAMBDA_STACK_NAME }} \
+            --query "Stacks[0].Outputs[?OutputKey=='ConsumerLambdaName'].OutputValue" \
+            --output text \
+            --region ${{ env.AWS_REGION }})
+          
+          echo "Producer Lambda: $PRODUCER_LAMBDA"
+          echo "Consumer Lambda: $CONSUMER_LAMBDA"
+
+  summary:
+    name: Deployment Summary
+    runs-on: ubuntu-latest
+    needs: [deploy-infrastructure, package-and-deploy-lambdas]
+    
+    steps:
+      - name: Print Deployment Summary
+        run: |
+          echo "✅ Infrastructure Stack Deployed: ${{ env.INFRASTRUCTURE_STACK_NAME }}"
+          echo "✅ Lambda Functions Stack Deployed: ${{ env.LAMBDA_STACK_NAME }}"
+          echo ""
+          echo "📦 Resources Created:"
+          echo "  - S3 Bucket: ${{ needs.deploy-infrastructure.outputs.s3-bucket }}"
+          echo "  - DynamoDB Table: ${{ needs.deploy-infrastructure.outputs.dynamodb-table }}"
+          echo "  - SNS Topic: ${{ needs.deploy-infrastructure.outputs.sns-topic-arn }}"
+          echo "  - SQS Queue: ${{ needs.deploy-infrastructure.outputs.sqs-queue-arn }}"
+          echo ""
+          echo "🚀 Deployment Complete!"
