@@ -88,7 +88,7 @@ def get_ec2_client(account_id, region):
     if account_id == current_account:
         return boto3.client('ec2', region_name=region)
     
-    role_arn = f"arn:aws:iam::{account_id}:role/NetworkDataCollectionReadOnly"
+    role_arn = f"arn:aws:iam::{account_id}:role/NetworkDataCollectionRole"
     
     try:
         assumed_role = sts.assume_role(
