@@ -123,7 +123,7 @@ Resources:
               - Effect: Allow
                 Action:
                   - sts:AssumeRole
-                Resource: 'arn:aws:iam::*:role/NetworkDataCollectionRole'
+                Resource: 'arn:aws:iam::*:role/NetworkDataCollectionReadOnly'
               - Effect: Allow
                 Action:
                   - ec2:Describe*
